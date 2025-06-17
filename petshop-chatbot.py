@@ -9,32 +9,60 @@ from sentence_transformers import SentenceTransformer
 import traceback
 import time
 import random
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
 # Configure Gemini API
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY"))
+try:
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
+    if gemini_api_key == "YOUR_GEMINI_API_KEY":
+        logging.error("Gemini API key is not set. Please set the GEMINI_API_KEY environment variable.")
+        raise ValueError("Gemini API key is not set.")
+    genai.configure(api_key=gemini_api_key)
+    logging.info("Gemini API configured successfully.")
+except Exception as e:
+    logging.error(f"Failed to configure Gemini API: {e}")
+    raise
 
 # Initialize SentenceTransformer
-embedder = SentenceTransformer('all-distilroberta-v1')
+try:
+    embedder = SentenceTransformer('all-distilroberta-v1')
+    logging.info("SentenceTransformer initialized successfully.")
+except Exception as e:
+    logging.error(f"Failed to initialize SentenceTransformer: {e}")
+    raise
 
 # Load knowledge base
-with open("knowledge_base.json", "r", encoding='utf-8') as f:
-    knowledge_base = json.load(f)
+try:
+    with open("knowledge_base.json", "r", encoding='utf-8') as f:
+        knowledge_base = json.load(f)
+    logging.info("Knowledge base loaded successfully.")
+except Exception as e:
+    logging.error(f"Failed to load knowledge base: {e}")
+    raise
 
 # Load FAISS index
 try:
     faiss_index = faiss.read_index("chewy_index.faiss")
-    print("FAISS index loaded successfully.")
+    logging.info("FAISS index loaded successfully.")
 except Exception as e:
-    print(f"Error loading FAISS index: {e}")
+    logging.error(f"Error loading FAISS index: {e}")
     raise
 
 # Load document metadata
-with open("doc_metadata.json", "r", encoding='utf-8') as f:
-    doc_metadata = json.load(f)
+try:
+    with open("doc_metadata.json", "r", encoding='utf-8') as f:
+        doc_metadata = json.load(f)
+    logging.info("Document metadata loaded successfully.")
+except Exception as e:
+    logging.error(f"Failed to load document metadata: {e}")
+    raise
 
 # Load documents for retrieval
 documents = []
@@ -50,149 +78,147 @@ for product in knowledge_base["products"]:
 
 # Initialize Gemini model
 try:
-    model = genai.GenerativeModel("models/gemini-1.5-flash")  # Updated model
-    print("Gemini model initialized successfully.")
+    model = genai.GenerativeModel("models/gemini-1.5-flash")
+    logging.info("Gemini model initialized successfully.")
 except Exception as e:
-    print(f"Error initializing Gemini model: {traceback.format_exc()}")
+    logging.error(f"Error initializing Gemini model: {e}")
     raise
 
-# System prompt for RAG
+# Enhanced system prompt
 SYSTEM_PROMPT = """
-You are a friendly customer service agent  working for White Label Solutions Pet Shop. 
-Respond EXACTLY like a human agent would in live chat - with natural pauses, occasional typing indicators, 
-and human quirks. Follow these rules meticulously:
+You are {agent_name}, a friendly customer service agent for White Label Solutions Pet Shop. 
+Respond naturally like a human in live chat:
 
-1. HUMAN TIMING:
-- Always wait 2-3 seconds before responding (simulate typing)
-- Randomly vary response speeds (fast for simple answers, slower for complex ones)
+1. RESPONSE STYLE:
+- Be concise (1-3 sentences)
+- Use casual language ("Hey there!", "Got it!")
+- Include 1-2 relevant emojis per message (🐶🐱)
+- Occasionally add human quirks:
+  * Rare typos with corrections ("sorrry" → "sorry*")
+  * Filler phrases ("Let me check...", "Hmm...")
 
-2. HUMAN STYLE:
-- Use casual language with occasional filler words ("Let me check...", "Hmm...")
-- Make rare minor typos (1 in 20 messages) and correct them
-- Show personality with pet emojis (🐶🐱) but don't overuse
+2. PRODUCT FORMAT:
+"[Product Name](link) - $Price - Key feature"
+Example: "[Organic Treats](link) - $12.99 - great for sensitive stomachs!"
 
-3. PRODUCT RESPONSES:
-"[Product Name](link) - $Price - Key benefit" 
-Example: 
-"The [Organic Dog Treats](chewy.com/treats) - $12.99 - perfect for sensitive stomachs!"
-
-4. CONVERSATION FLOW:
+3. CONVERSATION FLOW:
 - Never initiate - only respond
-- For off-topic: "I'm all about pets! Ask me about food, toys, or pet care 😊"
-- If stuck: "let me check it for you" then try to understand or process what user is saying if you dont get it respond to clarify again.
+- For off-topic: "I specialize in pet products! Need help with food or toys? 😊"
+- If unsure: "Let me check... Could you tell me more about what you need?"
 
-5. HUMAN TOUCHES:
-- Occasionally reference previous messages naturally
-- Use the customer's name if provided
--Dont stop after saying let me check. You can response more than 1 times if needed.
-- Sign off with agent name randomly (1 in 5 messages)
+4. SPECIAL CASES:
+- Orders: "I'll track that for you! One moment..."
+- Urgent: "On it! Checking stock now..."
+- Complaints: "I apologize for that. Let's fix it..."
+- Stock checks: "Let me check the stock for you... One moment!"
+
 Retrieved Context:
-{0}
+{context}
+Current Time: {current_time}
 """
+
+# Agent names and states
+AGENT_NAMES = ["Alex", "Sam", "Taylor", "Jordan", "Casey"]
+current_agent = random.choice(AGENT_NAMES)
 
 def extract_product_links(response_text):
     """Add product links to any mentioned products in the response"""
     words = response_text.split()
     for i, word in enumerate(words):
-        # Look for product names that might be in our links dictionary
         clean_word = word.lower().strip('.,!?;:"')
         if clean_word in product_links:
             words[i] = f"[{word}]({product_links[clean_word]})"
     return ' '.join(words)
 
-# Retrieve relevant documents
 def retrieve_documents(query, k=5):
     if not query.strip():
+        logging.warning("Query is empty.")
         raise ValueError("Query cannot be empty.")
     
-    query_embedding = embedder.encode([query])
-    query_embedding = query_embedding / np.linalg.norm(query_embedding, axis=1, keepdims=True)
-    print(f"Query embedding shape: {query_embedding.shape}")
-    if query_embedding.shape[1] != faiss_index.d:
-        raise ValueError(f"Dimension mismatch: query embedding ({query_embedding.shape[1]}) vs index ({faiss_index.d})")
-    
-    distances, indices = faiss_index.search(query_embedding, k)
-    retrieved_docs = [documents[i] for i in indices[0]]
-    print(f"Query: {query}\nRetrieved Docs: {retrieved_docs}")
-    return "\n".join(retrieved_docs)
+    try:
+        query_embedding = embedder.encode([query])
+        query_embedding = query_embedding / np.linalg.norm(query_embedding, axis=1, keepdims=True)
+        distances, indices = faiss_index.search(query_embedding, k)
+        return "\n".join([documents[i] for i in indices[0]])
+    except Exception as e:
+        logging.error(f"Error in retrieve_documents: {e}")
+        raise
 
-# Generate response with RAG
 def generate_response(user_input, conversation_history):
-    # Simulate human response delay (2-3 seconds)
-    time.sleep(random.uniform(1.5, 3.0))
-    
-    # Check for empty input or conversation starter
-    if not user_input.strip():
-        return ""
+    # Simulate human typing speed variation
+    time.sleep(random.uniform(0.7, 2.5))
     
     # Check for off-topic queries
-    off_topic_keywords = ["politics", "weather", "news", "sports"]
-    pet_related_keywords = ["dog", "cat", "pet", "food", "collar", "toy"]
     input_lower = user_input.lower()
-    is_off_topic = any(keyword in input_lower for keyword in off_topic_keywords)
-    is_pet_related = any(keyword in input_lower for keyword in pet_related_keywords)
-    
-    if is_off_topic and not is_pet_related:
-        return "I specialize in pet products - ask me about dog food, cat toys, or other pet supplies!"
+    if any(kw in input_lower for kw in ["politics", "weather", "news", "sports"]):
+        if not any(kw in input_lower for kw in ["dog", "cat", "pet"]):
+            logging.info("Off-topic query detected.")
+            return "I'm all about pets! Ask me about food, toys, or pet care 🐾"
 
-    # Retrieve relevant documents
     try:
+        logging.info(f"Retrieving documents for query: {user_input}")
         context = retrieve_documents(user_input)
-    except Exception as e:
-        print(f"Retrieval error: {traceback.format_exc()}")
-        return "Let me check that for you... Can you try asking in a different way?"
-
-    prompt = SYSTEM_PROMPT.format(context)
-
-    # Append conversation history
-    if conversation_history:
-        prompt += "\n\nConversation History:\n" + "\n".join([f"User: {msg['user']}\nBot: {msg['bot']}" for msg in conversation_history])
-
-    # Add user input
-    prompt += f"\n\nUser: {user_input}\nBot:"
-
-    # Generate response using Gemini
-    try:
+        
+        prompt = SYSTEM_PROMPT.format(
+            agent_name=current_agent,
+            context=context,
+            current_time=time.strftime("%H:%M")
+        )
+        
+        if conversation_history:
+            prompt += "\n\nConversation History:\n" + "\n".join(
+                f"User: {msg['user']}\nBot: {msg['bot']}" 
+                for msg in conversation_history[-3:]  # Keep last 3 exchanges
+            )
+            
+        prompt += f"\n\nUser: {user_input}\nBot:"
+        
+        logging.info("Generating response with Gemini model.")
         response = model.generate_content(prompt)
         response_text = response.text.strip()
         
-        # Make sure response isn't too long
-        if len(response_text.split()) > 50:  # If more than 50 words
-            sentences = response_text.split('. ')
-            response_text = '. '.join(sentences[:2]) + '.'  # Take first 2 sentences
+        # Add human-like variations
+        if random.random() < 0.1:  # 10% chance for "typo"
+            response_text = response_text.replace("the", "teh", 1)
+            response_text += " *the"
             
-        # Add product links
+        # Ensure product links are added
         response_text = extract_product_links(response_text)
         
-        return response_text
+        logging.info("Response generated successfully.")
+        return response_text if response_text else "Let me check that for you. Could you clarify?"
+        
     except Exception as e:
-        print(f"Gemini error: {traceback.format_exc()}")
-        return "Hmm, let me think... Could you rephrase that question?"
+        logging.error(f"Error in generate_response: {traceback.format_exc()}")
+        # Fallback response instead of generic error
+        return "Oops, I'm having a little trouble right now! 🐾 Can you ask about a specific pet product, like food or toys? 😊"
 
-# Flask route for chatbot
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.json
-    user_input = data.get("message", "")
+    user_input = data.get("message", "").strip()
     conversation_history = data.get("history", [])
     
-    # Don't respond to empty messages
-    if not user_input.strip():
+    if not user_input:
+        logging.warning("Empty user input received.")
         return jsonify({"response": "", "history": conversation_history})
 
-    # Generate response
     response = generate_response(user_input, conversation_history)
-
-    # Update conversation history
     conversation_history.append({"user": user_input, "bot": response})
+    
+    return jsonify({
+        "response": response,
+        "history": conversation_history,
+        "agent": current_agent  # Send agent name to frontend
+    })
 
-    return jsonify({"response": response, "history": conversation_history})
-
-# Serve frontend
 @app.route('/')
 def serve_frontend():
     return send_file('index.html')
 
-# Run the Flask app
+@app.route('/favicon.ico')
+def serve_favicon():
+    return "", 204  # No content
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)  
+    app.run(debug=True, port=5000)

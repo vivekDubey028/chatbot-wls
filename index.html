@@ -4,6 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>White Label Solutions Pet Shop Chatbot</title>
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-YOUR_GA_ID"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-YOUR_GA_ID');
+    </script>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome CDN for icons -->
@@ -262,6 +270,35 @@
             0%, 100% { transform: scale(1); opacity: 0.8; }
             50% { transform: scale(1.02); opacity: 1; }
         }
+        /* Product suggestion buttons */
+        .product-suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        .product-button {
+            background: #f97316;
+            color: white;
+            border: none;
+            border-radius: 15px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+        }
+        .product-button:hover {
+            background: #ea580c;
+            transform: translateY(-2px);
+        }
+        .product-button::before {
+            content: '🐾';
+            margin-right: 5px;
+            font-size: 0.8rem;
+        }
     </style>
 </head>
 <body>
@@ -351,6 +388,16 @@
         }
         setPetState('idle');
 
+        // Track product click in Google Analytics
+        function trackProductClick(productName, productUrl) {
+            gtag('event', 'product_click', {
+                'event_category': 'engagement',
+                'event_label': productName,
+                'product_url': productUrl
+            });
+            console.log(`Tracked product click: ${productName}`);
+        }
+
         // Add message to chat
         function addMessage(content, isBot = false) {
             const messageDiv = document.createElement('div');
@@ -358,8 +405,39 @@
             
             // Process links in the message
             const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-            const processedContent = content.replace(linkRegex, '<a href="$2" target="_blank">$1</a>');
+            const urlRegex = /\(URL: ([^\)]+)\)/g;
+            
+            // Extract product links to create buttons
+            const productLinks = [];
+            let processedContent = content
+                .replace(linkRegex, (match, text, url) => {
+                    productLinks.push({ text, url });
+                    return `<strong>${text}</strong>`;
+                })
+                .replace(urlRegex, '');
+            
             messageDiv.innerHTML = processedContent;
+            
+            // Add product buttons if this is a bot message with products
+            if (isBot && productLinks.length > 0) {
+                const productContainer = document.createElement('div');
+                productContainer.className = 'product-suggestions';
+                
+                productLinks.forEach(product => {
+                    const productButton = document.createElement('button');
+                    productButton.className = 'product-button';
+                    productButton.innerHTML = `${product.text}`;
+                    
+                    productButton.addEventListener('click', () => {
+                        trackProductClick(product.text, product.url);
+                        window.open(product.url, '_blank');
+                    });
+                    
+                    productContainer.appendChild(productButton);
+                });
+                
+                messageDiv.appendChild(productContainer);
+            }
             
             chatMessages.appendChild(messageDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -474,7 +552,7 @@
                 setPetState('idle');
             } catch (error) {
                 removeTypingIndicator(typingDiv);
-                addMessage('Sorry, I couldn’t connect! Please try again later. 🐾', true);
+                addMessage('Sorry, I couldn\'t connect! Please try again later. 🐾', true);
             }
         });
     </script>

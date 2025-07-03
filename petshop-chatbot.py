@@ -66,15 +66,16 @@ except Exception as e:
 
 # Load documents for retrieval
 documents = []
-product_links = {}  # Store product name to link mapping
+product_links = {}  # Store product name to URL mapping
 for product in knowledge_base["products"]:
     doc = (
         f"Product: {product['name']} (${product['Price']}): {product['description']} "
         f"(Category: {product['category']}, Availability: {product['availability']}, "
-        f"Rating: {product['average_rating']} ({product['reviews_count']} reviews))"
+        f"Rating: {product['average_rating']} ({product['reviews_count']} reviews), "
+        f"Product URL: {product['url']})"
     )
     documents.append(doc)
-    product_links[product['name'].lower()] = product.get('link', '#')
+    product_links[product['name'].lower()] = product.get('url', '#')  # Use 'url' field
 
 # Initialize Gemini model
 try:
@@ -98,13 +99,14 @@ Respond naturally like a human in live chat:
   * Filler phrases ("Let me check...", "Hmm...")
 
 2. PRODUCT FORMAT:
-"[Product Name](link) - $Price - Key feature"
-Example: "[Organic Treats](link) - $12.99 - great for sensitive stomachs!"
+"[Product Name](<url>) - $Price - Key feature (URL: <url>)"
+Example: "[Organic Treats](https://example.com) - $12.99 - great for sensitive stomachs! (URL: https://example.com)"
 
 3. CONVERSATION FLOW:
 - Never initiate - only respond
 - For off-topic: "I specialize in pet products! Need help with food or toys? 😊"
 - If unsure: "Let me check... Could you tell me more about what you need?"
+- When mentioning you have product options (e.g., 'We have a few options!'), immediately provide 1-2 specific product examples from the retrieved context, formatted per the PRODUCT FORMAT, without waiting for user input.
 
 4. SPECIAL CASES:
 - Orders: "I'll track that for you! One moment..."
@@ -127,7 +129,18 @@ def extract_product_links(response_text):
     for i, word in enumerate(words):
         clean_word = word.lower().strip('.,!?;:"')
         if clean_word in product_links:
-            words[i] = f"[{word}]({product_links[clean_word]})"
+            # Skip if already in markdown link format
+            if i > 0 and words[i-1].endswith('[') and i < len(words)-1 and words[i+1].startswith(']'):
+                continue
+            product_name = word
+            product_url = product_links[clean_word]
+            # Find product details in knowledge base
+            for product in knowledge_base["products"]:
+                if product['name'].lower() == clean_word:
+                    price = product['Price']
+                    description = product['description'][:50] + "..."  # Short key feature
+                    words[i] = f"[{product_name}]({product_url}) - ${price} - {description} (URL: {product_url})"
+                    break
     return ' '.join(words)
 
 def retrieve_documents(query, k=5):

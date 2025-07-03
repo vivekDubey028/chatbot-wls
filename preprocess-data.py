@@ -21,7 +21,8 @@ df.fillna({
     'ingredients': 'No ingredients listed.',
     'nutrition_analysis': 'No nutrition info.',
     'average_rating': 0.0,
-    'reviews_count': 0
+    'reviews_count': 0,
+    'url': ''  # Handle missing url (product URL column)
 }, inplace=True)
 
 # Create knowledge base
@@ -48,15 +49,17 @@ for idx, row in df.iterrows():
         "ingredients": row['ingredients'],
         "nutrition_analysis": row['nutrition_analysis'],
         "average_rating": float(row['average_rating']),
-        "reviews_count": int(row['reviews_count'])
+        "reviews_count": int(row['reviews_count']),
+        "url": row['url']  # Add product URL from 'url' column
     }
     knowledge_base["products"].append(product)
     
-    # Create document for retrieval
+    # Create document for retrieval, including product URL
     doc = (
         f"Product: {row['name']} (${product['Price']}): {row['description']} "
         f"(Category: {product['category']}, Availability: {row['availability']}, "
-        f"Rating: {row['average_rating']} ({row['reviews_count']} reviews))"
+        f"Rating: {row['average_rating']} ({row['reviews_count']} reviews), "
+        f"Product URL: {row['url']})"
     )
     documents.append(doc)
     doc_metadata.append({"type": "product", "id": row['uniq_id']})
@@ -66,7 +69,7 @@ with open("knowledge_base.json", "w", encoding='utf-8') as f:
     json.dump(knowledge_base, f, ensure_ascii=False, indent=2)
 
 # Initialize SentenceTransformer
-embedder = SentenceTransformer('all-distilroberta-v1')  # Updated to match petshop_chatbot.py
+embedder = SentenceTransformer('all-distilroberta-v1')
 
 # Create FAISS index
 embeddings = embedder.encode(documents)

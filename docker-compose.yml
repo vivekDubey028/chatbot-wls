@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  chatbot:
+    build: .
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs  # For persistent logs
+      - ./chewy:/app/chewy:ro  # Optional: Mount data for updates (overrides baked-in)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s  # Time for preprocessing
+
+volumes:
+  logs:

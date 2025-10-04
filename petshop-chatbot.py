@@ -10,14 +10,29 @@ import traceback
 import time
 import random
 import logging
-
+from logging.handlers import RotatingFileHandler
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-key-change-in-prod')
+app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
 
+#setting up loggers
+os.makedirs('logs', exist_ok=True)
+handler = RotatingFileHandler('logs/chatbot.log', maxBytes=10000, backupCount=1)
+handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO if os.getenv('LOG_LEVEL') == 'INFO' else logging.DEBUG)
+
+#setting yup helathcheckup
+# Health check
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"}), 200
 # Configure Gemini API
 try:
     gemini_api_key = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
@@ -40,7 +55,7 @@ except Exception as e:
 
 # Load knowledge base
 try:
-    with open("knowledge_base.json", "r", encoding='utf-8') as f:
+    with open("chewy/knowledge_base.json", "r", encoding='utf-8') as f:
         knowledge_base = json.load(f)
     logging.info("Knowledge base loaded successfully.")
 except Exception as e:
@@ -49,7 +64,7 @@ except Exception as e:
 
 # Load FAISS index
 try:
-    faiss_index = faiss.read_index("chewy_index.faiss")
+    faiss_index = faiss.read_index("chewy/chewy_index.faiss")
     logging.info("FAISS index loaded successfully.")
 except Exception as e:
     logging.error(f"Error loading FAISS index: {e}")
@@ -57,7 +72,7 @@ except Exception as e:
 
 # Load document metadata
 try:
-    with open("doc_metadata.json", "r", encoding='utf-8') as f:
+    with open("chewy/doc_metadata.json", "r", encoding='utf-8') as f:
         doc_metadata = json.load(f)
     logging.info("Document metadata loaded successfully.")
 except Exception as e:
@@ -79,7 +94,7 @@ for product in knowledge_base["products"]:
 
 # Initialize Gemini model
 try:
-    model = genai.GenerativeModel("models/gemini-1.5-flash")
+    model = genai.GenerativeModel("models/gemini-2.5-flash")
     logging.info("Gemini model initialized successfully.")
 except Exception as e:
     logging.error(f"Error initializing Gemini model: {e}")
@@ -227,7 +242,7 @@ def chat():
 
 @app.route('/')
 def serve_frontend():
-    return send_file('index.html')
+    return send_file('templates/index.html')
 
 @app.route('/favicon.ico')
 def serve_favicon():
@@ -235,4 +250,4 @@ def serve_favicon():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=port, debug=app.config['DEBUG'])
